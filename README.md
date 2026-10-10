@@ -1,149 +1,117 @@
-# 编译指南
+# 京东云雅典娜最小 LibWrt 固件
 
-本仓库用于按设备配置自动拉取 OpenWrt / ImmortalWrt / LiBwrt 源码、应用自定义补丁与软件包配置，并输出固件到 `firmware/` 目录。
+本 fork 只构建京东云雅典娜 / RE-CS-02（AX6600）。源码为
+[LiBwrt/openwrt-6.x](https://github.com/LiBwrt/openwrt-6.x) 的 `25.12-nss` 分支，
+源码提交固定在 `wrt_core/compilecfg/jdcloud_ipq60xx_libwrt.ini` 的 `COMMIT_HASH`。
+保留上游 Wi-Fi 固件、NSS 驱动与默认硬件设置，不运行原仓库的第三方软件包替换流程。
+旧设备配置和模块文件仅作为历史参考，构建入口不再使用它们。
 
-## 1. 环境准备
+## 固件内容
 
-推荐使用 Ubuntu LTS 或其他主流 Linux 发行版。OpenWrt 编译对磁盘空间、内存和文件系统大小写敏感性有要求，建议预留充足磁盘空间并在原生 Linux 文件系统中编译。
+| 功能 | 内容 |
+| --- | --- |
+| 基础路由 | LuCI（含中文）、Dropbear SSH、dnsmasq、DHCP/IPv6、PPPoE、firewall4 |
+| Docker | docker、dockerd、containerd、runc、overlayfs、cgroups、namespaces、seccomp、iptables-nft |
+| IPsec / XFRM | ip-full、kmod-ipsec、kmod-ipsec4、kmod-ipsec6 |
+| IPsec 加密 | kmod-crypto-authenc、kmod-crypto-cbc、kmod-crypto-hmac、kmod-crypto-sha1；AES 已内置于内核 |
+| EC20 串口 | kmod-usb-serial、kmod-usb-serial-wwan、kmod-usb-serial-option |
+| EC20 网络 | kmod-usb-wdm、kmod-usb-net-qmi-wwan、uqmi、luci-proto-qmi；另含 ECM/RNDIS 驱动 |
+| 基础存储/诊断 | eMMC/USB ext4 支持、block-mount、e2fsprogs、usbutils、picocom |
 
-## 2. 安装编译依赖
+不包含 SmartDNS、MosDNS、AdGuardHome、OpenClash、PassWall、HomeProxy、
+SSR Plus、Xray、sing-box、Mihomo、EasyTier、Lucky、iStore、Samba、CUPS 或 Dockerman。
+“不要 DNS 工具”按不包含额外 DNS 应用理解；仍保留基础 dnsmasq，供局域网 DHCP/DNS 使用。
+上游自动解析的硬件与 Docker 依赖会随源码/feeds 变化，不保证仅安装表中包名。
+
+AES 在此源码的 `target/linux/generic/config-6.12` 中为 `CONFIG_CRYPTO_AES=y`，
+不存在独立 `kmod-crypto-aes` 包。不要向 OpenWrt `.config` 添加不存在的包名。
+
+## GitHub Actions 编译
+
+1. 打开 **Actions → Build Athena LibWrt → Run workflow**。
+2. 默认只编译并上传 Artifact；勾选 `publish` 才会发布 Release。
+3. 也可运行 **Release Athena LibWrt**，它复用相同构建流程并发布 Release。
+4. 下载 `athena-libwrt-*` Artifact，或者 Release 的固件文件。
+
+Actions 只缓存 `dl` 和 `.ccache`，不复用 `staging_dir` 或修改构建时间戳。
+配置阶段与固件 manifest 阶段都会检查必要的软件包；缺失就失败，不交付缺包固件。
+
+## 本地编译
+
+推荐 Ubuntu 24.04，至少预留 60 GB 磁盘空间。安装依赖：
 
 ```bash
-sudo apt -y update
-sudo apt -y full-upgrade
-sudo apt install -y dos2unix libfuse-dev
-sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
-```
+sudo apt-get update
+sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib \
+  gettext git libncurses-dev libssl-dev python3 python3-setuptools rsync swig \
+  unzip zlib1g-dev file wget curl zstd libelf-dev autoconf automake libtool \
+  pkg-config cmake ninja-build ccache
 
-容器构建还需要已安装并可正常运行的 Docker。
-
-## 3. 获取源码
-
-```bash
-git clone https://github.com/ZqinKing/wrt_release.git
+git clone https://github.com/zhiim/wrt_release.git
 cd wrt_release
-```
-
-## 4. 编译用法
-
-### 交互式选择
-
-直接运行脚本会列出当前 `wrt_core/compilecfg/*.ini` 与 `wrt_core/deconfig/*.config` 同时存在的设备配置，并提示选择构建模式：
-
-```bash
 ./build.sh
 ```
 
-### 直接指定设备
+本地使用 `libwrt/` 作为工作目录；Actions 使用 `action_build/`。
+OpenWrt 构建应以普通用户执行。脚本支持从任意当前目录调用。
 
 ```bash
-./build.sh <设备配置名> [debug|container|container_debug|config_preview]
+./build.sh config_preview               # 仅打印所选配置，不下载源码
+./build.sh debug                        # 拉取源码、展开并验证配置，停止于 defconfig
+./build.sh compile                      # 继续构建已配置的源码树，不再次更新 feeds
+BUILD_JOBS=4 ./build.sh                 # 限制并发
+./build.sh jdcloud_ipq60xx_libwrt        # 兼容原来的设备参数
 ```
 
-构建模式说明：
+此 fork 不提供其他机型或临时 add/remove fragments 入口。
+需要改包时编辑以下文件，先运行 `debug` 验证，再运行 `compile`：
 
-| 模式 | 命令示例 | 说明 |
-| --- | --- | --- |
-| 默认 | `./build.sh x64_immwrt` | 拉取源码、应用配置、下载依赖并完整编译固件。 |
-| `debug` | `./build.sh x64_immwrt debug` | 执行到 `make defconfig` 后停止，用于检查配置，不产出固件。 |
-| `container` | `./build.sh x64_immwrt container` | 使用 Docker 容器执行完整构建，减少本机环境差异。 |
-| `container_debug` | `./build.sh x64_immwrt container_debug` | 在 Docker 容器中执行 debug 流程并进入交互 shell。 |
-| `config_preview` | `./build.sh x64_immwrt config_preview` | 只预览配置片段组合，不拉取源码、不写构建目录。 |
+- `wrt_core/deconfig/jdcloud_ipq60xx_libwrt.config`：唯一硬件目标与存储/USB 控制器。
+- `wrt_core/deconfig/compile_base.config`：基础路由与排除项。
+- `wrt_core/deconfig/fragments/docker_deps.config`：Docker。
+- `wrt_core/deconfig/fragments/vowifi.config`：XFRM/IPsec 和加密。
+- `wrt_core/deconfig/fragments/ec20.config`：EC20 驱动与工具。
 
-可通过环境变量临时追加或移除配置片段：
+## 构建产物
 
-```bash
-ADD_CONFIG_FRAGMENTS=docker_deps ./build.sh gemtek_w1701k_immwrt config_preview
-REMOVE_CONFIG_FRAGMENTS=proxy ./build.sh x64_immwrt config_preview
+`firmware/` 包含雅典娜固件、manifest、完整 `build.config`、`build-info.txt`、
+`feeds.buildinfo`、`sha256sums` 和 `packages-athena.tar.gz`。
+后者包含本次编译生成的 `.ipk` / `.apk` 包，尤其是与该固件内核 ABI 匹配的 kmod。
+不要安装其他版本 OpenWrt/ImmortalWrt 源里的内核模块。
+
+源码提交固定；feeds 按上游配置更新，并记录精确版本在 `feeds.buildinfo` 中。
+升级源码时同步修改 `COMMIT_HASH`，并重新运行配置检查和完整构建。
+
+## 刷入后的检查
+
+Docker 上游默认数据路径为 `/opt/docker/`。启动 Docker 前，确认 `/opt` 已挂载到
+用于存储容器数据的 eMMC/USB 分区；挂载点本身不能保证数据写入外部分区。
+
+```sh
+ip -V
+ip xfrm state list
+ip xfrm policy list
+# 无已建立连接时 state/policy 为空是正常的；不应出现 Protocol not supported。
+grep -E 'cbc\(aes\)|sha1|authenc' /proc/crypto
+
+docker version
+/etc/init.d/dockerd start
+docker info
+# 实际拉取运行会访问外部镜像仓库：
+# docker run --rm hello-world
+
+lsusb
+ls /dev/ttyUSB* /dev/cdc-wdm* 2>/dev/null
+dmesg | grep -Ei 'usb|option|qmi|wwan'
+# AT 端口编号取决于模块 USB composition，用实际的端口替换：
+# picocom -b 115200 /dev/ttyUSB2
+# uqmi -d /dev/cdc-wdm0 --get-capabilities
 ```
 
-GitHub Actions 的手动构建也提供 `add_fragments` 与 `remove_fragments` 输入项，语义与上述环境变量一致。
+`lsusb` 显示的文字名称不能说明驱动绑定是否成功；应检查 `ttyUSB*`、`cdc-wdm*`
+和内核日志。这里配置正常工作模式下的 EC20 串口/QMI/ECM/RNDIS 支持，
+不能修复模块固件故障、USB 供电不足或模块停在下载模式的问题。
 
-编译完成后，脚本会从 `<BUILD_DIR>/bin/targets/` 收集固件文件到仓库根目录的 `firmware/`。每次完整构建前会清理旧的目标固件文件，`firmware/Packages.manifest` 会被移除。
-
-## 5. 支持设备
-
-设备配置名来自 `wrt_core/compilecfg/` 和 `wrt_core/deconfig/` 中同名文件。当前支持：
-
-| 厂商 / 平台 | 设备 | 配置名 |
-| --- | --- | --- |
-| 京东云 | 雅典娜(02)、亚瑟(01)、太乙(07)、AX5(JDC版) | `jdcloud_ipq60xx_immwrt` |
-| 京东云 | 雅典娜(02)、亚瑟(01)、太乙(07)、AX5(JDC版) - LiBwrt | `jdcloud_ipq60xx_libwrt` |
-| 京东云 | 百里 / AX6000 | `jdcloud_ax6000_immwrt` |
-| 阿里云 | AP8220 | `aliyun_ap8220_immwrt` |
-| 阿里云 | AP8220 - LiBwrt | `aliyun_ap8220_libwrt` |
-| Linksys | MX4200v1、MX4200v2、MX4300 | `linksys_mx4x00_immwrt` |
-| Link | NN6000v2 | `link_nn6000v2_immwrt` |
-| 奇虎 | 360v6 | `qihoo_360v6_immwrt` |
-| 红米 | AX5 | `redmi_ax5_immwrt` |
-| 红米 | AX6 | `redmi_ax6_immwrt` |
-| 红米 | AX6 - LiBwrt | `redmi_ax6_libwrt` |
-| 红米 | AX6000 | `redmi_ax6000_immwrt21` |
-| CMCC（中国移动） | RAX3000M | `cmcc_rax3000m_immwrt` |
-| 斐讯 | N1 | `n1_immwrt` |
-| 兆能 | M2 | `zn_m2_immwrt` |
-| 兆能 | M2 - LiBwrt | `zn_m2_libwrt` |
-| Gemtek | W1701K | `gemtek_w1701k_immwrt` |
-| x86 | X64 | `x64_immwrt` |
-
-示例：
-
-```bash
-./build.sh jdcloud_ipq60xx_immwrt
-./build.sh aliyun_ap8220_libwrt
-./build.sh redmi_ax6_libwrt container
-```
-
-## 6. 配置来源
-
-每个设备由两类文件共同定义：
-
-- `wrt_core/compilecfg/<设备配置名>.ini`：定义源码仓库、分支、构建目录、默认配置片段、可选提交哈希和容器 SDK 镜像。
-- `wrt_core/deconfig/<设备配置名>.config`：定义 OpenWrt 目标平台、设备和软件包配置。
-
-不同设备会使用不同上游源码，例如 `VIKINGYFY/immortalwrt`、`immortalwrt/immortalwrt`、`LiBwrt/openwrt-6.x`、`padavanonly/immortalwrt-mt798x` 或本仓库维护的特定分支。`BUILD_TARGET_SDK` 未配置时，容器构建默认使用 `immortalwrt/sdk:openwrt-25.12`。
-
-构建时会按顺序组合配置：
-
-1. 设备专用 `.config`
-2. `compile_base.config`
-3. `wrt_core/deconfig/fragments/<name>.config` 中的有效配置片段
-
-默认片段由 `compilecfg/*.ini` 的 `CONFIG_FRAGMENTS` 指定：
-
-- 所有设备默认包含 `proxy`。
-- IPQ60xx / IPQ807x 设备默认额外包含 `nss`。
-- 只有已显式选择 Dockerman 或明确适合运行 Docker 的设备默认包含 `docker_deps`，用于预置手动安装 Docker 所需的运行依赖，避免 NAND 空间紧张或无 USB 设备被默认加入 Docker 依赖。
-
-`ADD_CONFIG_FRAGMENTS` 会在默认片段后追加，`REMOVE_CONFIG_FRAGMENTS` 会从最终片段中移除对应配置片段。移除只表示“不追加这个 fragment”，不会反向修改设备 `.config` 或 `compile_base.config` 中已经写明的配置。
-
-## 7. 三方插件
-
-三方插件主要通过 feeds 机制加入，其中 small-package 源自：
-
-```text
-https://github.com/kenzok8/small-package.git
-```
-
-相关增删和同步逻辑位于 `wrt_core/update.sh` 编排的 `wrt_core/modules/` 静态阶段。配置片段只选择 Kconfig，不负责 clone 仓库、修改 feeds 或安装 feeds。
-
-## 8. 项目结构说明
-
-- `build.sh`：主编译入口，负责设备选择、模式选择、配置组合、容器构建和固件收集。
-- `firmware/`：完整构建后的固件输出目录，由脚本自动创建和刷新。
-- `wrt_core/build_container.sh`：容器内构建入口。
-- `wrt_core/update.sh`：源码更新、feeds 调整、软件包同步和补丁应用主流程。
-- `wrt_core/pre_clone_action.sh`：GitHub Actions 预克隆辅助脚本。
-- `wrt_core/compilecfg/`：设备构建元信息 `.ini`。
-- `wrt_core/deconfig/`：设备和共享默认配置 `.config`。
-- `wrt_core/deconfig/fragments/`：可组合配置片段。
-- `wrt_core/modules/`：模块化脚本，包括仓库准备、网络重试、feeds/custom_feed、源码修正、LuCI 修正、服务修正、验证、Docker、CUPS 等静态职责模块。
-- `wrt_core/patches/`：补丁、默认设置、Wi-Fi 初始化、NSS 诊断、PBR 规则和其他构建时注入文件。
-
-## 9. OAF（应用过滤）功能使用说明
-
-使用 OAF（应用过滤）功能前，需先完成以下操作：
-
-1. 打开系统设置 → 启动项 → 定位到「appfilter」
-2. 将「appfilter」当前状态从已禁用更改为已启用
-3. 完成配置后，点击启动按钮激活服务
+本仓库提供 VoCat 所需的底层支持，不预装 VoCat 或 strongSwan，不保证 VOXI IMS 注册。
+VoCat、9eSIM 配置和 UDP 4500 网络链路需另行部署测试。
+刷机前仍需确认当前 U-Boot、GPT/分区布局与此上游的雅典娜镜像兼容。

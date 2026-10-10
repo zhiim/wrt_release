@@ -32,3 +32,6 @@ wrt_core/deconfig/test.config
 .taskmaster/
 .sisyphus/
 AGENTS.md
+
+action_build/
+repo_flag
