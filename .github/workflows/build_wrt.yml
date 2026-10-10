@@ -138,7 +138,13 @@ jobs:
         env:
           ADD_CONFIG_FRAGMENTS: ${{ inputs.add_fragments }}
           REMOVE_CONFIG_FRAGMENTS: ${{ inputs.remove_fragments }}
-        run: ./build.sh ${{ inputs.model }}
+        run: |
+          case "${{ inputs.model }}" in
+            jdcloud_ipq60xx_*)
+              export ADD_CONFIG_FRAGMENTS="${ADD_CONFIG_FRAGMENTS:+$ADD_CONFIG_FRAGMENTS,}vowifi,jdcloud_athena"
+              ;;
+          esac
+          ./build.sh ${{ inputs.model }}
 
       - name: Delete Old Cache
         run: |
